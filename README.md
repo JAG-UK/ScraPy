@@ -1,0 +1,2 @@
+# ScraPy
+Python SCRAPI implementation
