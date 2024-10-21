@@ -102,10 +102,10 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
     returns:
         application/json
     """
-    def registerSignedStatement(self):
+    def registerSignedStatement(self, statement):
         self.checkEngine()
 
-        return self.engine.registerSignedStatement()
+        return self.engine.registerSignedStatement(statement)
 
     """Wrapper for SCRAPI Check Registration call
 
@@ -123,15 +123,15 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
     """Wrapper for SCRAPI Resolve Receipt call
 
     args:
-        receipt_id (str): 
+        entry_id (str): 
     
     returns:
         application/cose
     """
-    def resolveReceipt(self, receipt_id):
+    def resolveReceipt(self, entry_id):
         self.checkEngine()
 
-        return self.engine.resolveReceipt(receipt_id)
+        return self.engine.resolveReceipt(entry_id)
 
     """Utility function for synchronous receipt generation.
     
