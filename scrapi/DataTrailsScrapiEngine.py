@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """DataTrails SCRAPI Engine implementation
 """
-import logging
-
 from ScrapiEngine import ScrapiEngine
 
 from archivist.archivist import Archivist
 from archivist.errors import ArchivistBadRequestError
 from archivist.logger import set_logger
+
+import logging
+import requests
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,42 +41,46 @@ class DataTrailsScrapiEngine(ScrapiEngine):
         raise NotImplementedError('getConfiguration')
     
     def registerSignedStatement(self, statement):
-        
-        # TODO: Bug 10061: raw data POST in the python SDK does not
-        # add auth headers. Grab them here instead (but this code should
-        # be removed once 10061 is fixed)
-        headers = self._archivist._add_headers({})
-
         # TODO: DataTrails SDK doesn't have native SCITT support yet
-        # but we can still use the general robust machinery to submit
-        # calls to the REST endpoint.
+        # but we can still use the Archivist object to look after our
+        # authenticated connection to the server
         # When the SCRAPI standard settles this code will migrate to the
         # core DataTrails SDK
-        response = self._archivist.post(
+        headers = self._archivist._add_headers({})
+        response = requests.post(
             f"{self._url}/archivist/v1/publicscitt/entries",
-            statement,
-            headers=headers,
-            data=True
+            data=statement,
+            headers=headers
         )
 
-        # Two main failure modes:
+        # Three main failure modes:
+        # - General network or API error: non-200 return
         # - Malformed statement or general errors will not return an operation ID
         # - Failure of registration policy or somesuch will return a failed operation
-        if not 'operationID' in response:
+        if response.status_code != 200:
+            logging.debug({response})
             raise Exception(f"Failed to register statement: {response}")
 
-        if not 'status' in response or response['status'] == 'failed':
+        operation = response.json()
+
+        if not 'operationID' in operation:
+            raise Exception(f"Failed to register statement: {response}")
+
+        if not 'status' in operation or operation['status'] == 'failed':
             raise Exception(f"Failed to register statement: {response}")
         
-        return response['operationID']
+        return operation['operationID']
 
     def checkRegistration(self, registration_id):
-        logging.debug(f"Checking on operation {registration_id}")
+        logging.debug(f'checking on operation {registration_id}')
         # TODO: DataTrails SDK doesn't have native SCITT support yet
         # but we can still use the general robust machinery to submit
         # calls to the REST endpoint.
         # When the SCRAPI standard settles this code will migrate to the
-        # core DataTrails SDK
+        # core DataTrails SDK.
+        # Worth using the DataTrails SDK rather than raw requests for
+        # this one because it includes generic error handling like 429s
+        # internally
         try:
             response = self._archivist.get(
                 f"{self._url}/archivist/v1/publicscitt/operations/{registration_id}"
@@ -87,24 +92,28 @@ class DataTrailsScrapiEngine(ScrapiEngine):
             # We're not in any position to know if this is just running or a
             # permanent problem, so return 'unspecified' and let the client app
             # sort it out for now.
-            logging.debug(f"Internal failure: {e}")
+            logging.error(f"Internal failure: {e}")
             return {'operationID': registration_id, 'status': 'running'}
         
         return response
 
     def resolveReceipt(self, entry_id):
-        logging.debug(f"Resolving receipt {entry_id}")
-        # TODO: DataTrails SDK doesn't have native SCITT support yet
-        # but we can still use the general robust machinery to submit
-        # calls to the REST endpoint.
+        logging.debug(f'resolving receipt {entry_id}')
+        # TODO: DataTrails SDK can't process non-JSON responses yet
+        # but we can still use the Archivist object to look after our
+        # authenticated connection to the server then call out to requests
         # When the SCRAPI standard settles this code will migrate to the
         # core DataTrails SDK
-        response = self._archivist.get(
+        headers = headers = self._archivist._add_headers({})
+        response = requests.get(
             f"{self._url}/archivist/v1/publicscitt/entries/{entry_id}/receipt",
-            return_raw=True
+            headers=headers
         )
+        if response.status_code != 200:
+            logging.debug(f"FAILED to get receipt: {response.status_code}")
+            return None
         
-        return response
+        return response.content
 
         
 
