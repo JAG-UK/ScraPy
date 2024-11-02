@@ -13,12 +13,14 @@ portable for any client integration.
 # - Use old emulator code for read/return of COSE. Minimal processing in here
 
 # Standard imports
+import cbor2
 from copy import deepcopy
 import logging
 from time import time
 from typing import Any, BinaryIO
 
 # Scrapi imports
+import rfc9290
 
 
 # All Engines go here
@@ -105,7 +107,25 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
     def registerSignedStatement(self, statement):
         self.checkEngine()
 
-        return self.engine.registerSignedStatement(statement)
+        err, result = self.engine.registerSignedStatement(statement)
+        if err:
+            # Decode and log the RFC9290 Problem Details. 
+            problem_details = rfc9290.decode_problem_details(result)
+            print(problem_details)
+            return None
+        else:
+            # Pull the registration ID out
+            operation = cbor2.loads(result)
+
+            # Check for common errors
+            if not 'status' in operation or operation['status'] == 'failed':
+                raise Exception(f"Statement Registration Failed")
+        
+            if not 'operationID' in operation:
+                raise Exception(f"No Operation ID for Statement")
+            
+            # Seems legit, send it back
+            return operation['operationID']
 
     """Wrapper for SCRAPI Check Registration call
 
@@ -118,7 +138,25 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
     def checkRegistration(self, registration_id):
         self.checkEngine()
 
-        return self.engine.checkRegistration(registration_id)
+        err, result = self.engine.checkRegistration(registration_id)
+        if err:
+            # Decode and log the RFC9290 Problem Details. 
+            problem_details = rfc9290.decode_problem_details(result)
+            print(problem_details)
+            return None
+        else:
+            # Pull the registration ID out
+            operation = cbor2.loads(result)
+
+            # Check for common errors
+            if not 'operationID' in operation:
+                raise Exception(f"Operation ID link lost")
+
+            if not 'status' in operation:
+                raise Exception(f"No LRO status for Operation ID")
+
+            # Seems legit, send it back
+            return cbor2.loads(result)
                                                    
     """Wrapper for SCRAPI Resolve Receipt call
 
@@ -131,7 +169,15 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
     def resolveReceipt(self, entry_id):
         self.checkEngine()
 
-        return self.engine.resolveReceipt(entry_id)
+        err, result = self.engine.resolveReceipt(entry_id)
+
+        if err:
+            # Decode and log the RFC9290 Problem Details. 
+            problem_details = rfc9290.decode_problem_details(result)
+            print(problem_details)
+            return None
+        else:
+            return result
 
     """Utility function for synchronous receipt generation.
     

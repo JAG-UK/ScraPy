@@ -7,6 +7,7 @@ from archivist.archivist import Archivist
 from archivist.errors import ArchivistBadRequestError
 from archivist.logger import set_logger
 
+import cbor2
 import logging
 import requests
 
@@ -61,15 +62,9 @@ class DataTrailsScrapiEngine(ScrapiEngine):
             logging.debug({response})
             raise Exception(f"Failed to register statement: {response}")
 
-        operation = response.json()
-
-        if not 'operationID' in operation:
-            raise Exception(f"Failed to register statement: {response}")
-
-        if not 'status' in operation or operation['status'] == 'failed':
-            raise Exception(f"Failed to register statement: {response}")
-        
-        return operation['operationID']
+        # FIXME: The DataTrails implementation currently returns JSON.
+        # Fake up CBOR response here so that common code doesn't need to change
+        return None, cbor2.dumps(response.json())
 
     def checkRegistration(self, registration_id):
         logging.debug(f'checking on operation {registration_id}')
@@ -81,21 +76,27 @@ class DataTrailsScrapiEngine(ScrapiEngine):
         # Worth using the DataTrails SDK rather than raw requests for
         # this one because it includes generic error handling like 429s
         # internally
-        try:
-            response = self._archivist.get(
-                f"{self._url}/archivist/v1/publicscitt/operations/{registration_id}"
-            )
-        except ArchivistBadRequestError as e:
+        headers = headers = self._archivist._add_headers({})
+        response = requests.get(
+            f"{self._url}/archivist/v1/publicscitt/operations/{registration_id}",
+            headers=headers
+        )
+        if response.status_code == 400:
             # TODO The Public SCITT endpoint returns 400 for Events that have not
             # made it across the sharing boundary yet. Bodge in a non-fatal fix
             # here but this needs to be made better.
             # We're not in any position to know if this is just running or a
             # permanent problem, so return 'unspecified' and let the client app
             # sort it out for now.
-            logging.error(f"Internal failure: {e}")
-            return {'operationID': registration_id, 'status': 'running'}
-        
-        return response
+            logging.debug(f"Suspected temporary propagation 400 error")
+            return None, cbor2.dumps({'operationID': registration_id, 'status': 'running'})
+        elif response.status_code not in [200, 202]:
+            logging.debug(f"FAILED to get operaiton status: {response.status_code}")
+            return response.content, None
+
+        # FIXME: The DataTrails implementation currently returns JSON.
+        # Fake up CBOR response here so that common code doesn't need to change
+        return None, cbor2.dumps(response.json())
 
     def resolveReceipt(self, entry_id):
         logging.debug(f'resolving receipt {entry_id}')
@@ -111,9 +112,6 @@ class DataTrailsScrapiEngine(ScrapiEngine):
         )
         if response.status_code != 200:
             logging.debug(f"FAILED to get receipt: {response.status_code}")
-            return None
+            return response.content, None
         
-        return response.content
-
-        
-
+        return None, response.content
