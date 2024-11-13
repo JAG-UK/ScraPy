@@ -5,37 +5,23 @@ This module contains the core SCRAPI calls which should be
 portable for any client integration.
 """
 
-#TODO next
-#
-#Start calling functions
-#Unknowns:
-# - How to return COSE/JSON _and_ indicate errors?
-# - Use old emulator code for read/return of COSE. Minimal processing in here
-
 # Standard imports
-import cbor2
-from copy import deepcopy
 import logging
 from time import time
-from typing import Any, BinaryIO
 
-# Scrapi imports
-import rfc9290
-
+# SCRAPI and SCITT imports
+import cbor2
 
 # All Engines go here
-from DataTrailsScrapiEngine import DataTrailsScrapiEngine
+from datatrails_engine import DatatrailsEngine
+from scrapi_exception import ScrapiException
+
+from rfc9290 import decode_problem_details, encode_problem_details
 
 LOGGER = logging.getLogger(__name__)
 
 
-class ScrapiException(Exception):
-    """Indicate SCRAPI-specific errors
-    """
-
-
-class Scrapi():  # pylint: disable=too-many-instance-attributes
-    
+class Scrapi:  # pylint: disable=too-many-instance-attributes
     """Portable class for all Scrapi implementations.
 
     args:
@@ -43,177 +29,224 @@ class Scrapi():  # pylint: disable=too-many-instance-attributes
         ts_args (dict): TS-specific initialization params
 
     """
-    def __init__(
-        self,
-        ts_type: str,
-        ts_args: dict
-    ):
+
+    def __init__(self, ts_type: str, ts_args: dict):
         match ts_type:
-            case 'DataTrails':
-                self.engine = DataTrailsScrapiEngine(ts_args)
-            
+            case "DataTrails":
+                self.engine = DatatrailsEngine(ts_args)
+
             case _:
-                raise ScrapiException(f"Unknown engine type: {ts_type}'") 
+                raise ScrapiException(f"Unknown engine type: {ts_type}'")
 
     def __str__(self) -> str:
         if self.engine:
             return self.engine.__str__()
-        else:
-            return f"Scrapi (uninitialized)"
+
+        return "Scrapi (uninitialized)"
 
     # The following methods require a Transparency Service and so require the
     # engine to be initialized
 
-    """Helper to protect all calls that need a valid TS connection"""
-    def checkEngine(self):
+    def check_engine(self):
+        """Helper to protect all calls that need a valid TS connection"""
+
         logging.debug("Scrapi checking engine liveness...")
 
         if not self.engine:
             raise ScrapiException("No Transparency Service engine specified")
-        
+
         if not self.engine.initialized():
             raise ScrapiException("Transparency Service engine malfunction")
-        
+
         logging.debug("Scrapi engine check SUCCESS")
 
-    """Wrapper for SCRAPI Transparency Configuration call
+    def get_configuration(self):
+        """Wrapper for SCRAPI Transparency Configuration call
 
-    args:
-        none
-    
-    returns:
-        application/json
-    """
-    def getConfiguration(self):
-        self.checkEngine()
+        args:
+            none
 
-        return self.engine.getConfiguration()
-        
-    """Wrapper for SCRAPI Register Signed Statement call
+        returns:
+            application/json
+        """
 
-    args:
-        Content-Type: application/cose
+        self.check_engine()
 
-        18([                            / COSE Sign1         /
-          h'a1013822',                  / Protected Header   /
-          {},                           / Unprotected Header /
-          null,                         / Detached Payload   /
-          h'269cd68f4211dffc...0dcb29c' / Signature          /
-        ])
-    
-    returns:
-        application/json
-    """
-    def registerSignedStatement(self, statement):
-        self.checkEngine()
+        return self.engine.get_configuration()
 
-        err, result = self.engine.registerSignedStatement(statement)
+    def register_signed_statement(self, statement):
+        """Wrapper for SCRAPI Register Signed Statement call
+
+        args:
+            Content-Type: application/cose
+
+            18([                            / COSE Sign1         /
+            h'a1013822',                  / Protected Header   /
+            {},                           / Unprotected Header /
+            null,                         / Detached Payload   /
+            h'269cd68f4211dffc...0dcb29c' / Signature          /
+            ])
+
+        returns:
+            application/json
+        """
+
+        self.check_engine()
+
+        err, result = self.engine.register_signed_statement(statement)
         if err:
-            # Decode and log the RFC9290 Problem Details. 
-            problem_details = rfc9290.decode_problem_details(result)
+            # Decode and log the RFC9290 Problem Details.
+            problem_details = decode_problem_details(result)
             print(problem_details)
             return None
-        else:
-            # Pull the registration ID out
-            operation = cbor2.loads(result)
 
-            # Check for common errors
-            if not 'status' in operation or operation['status'] == 'failed':
-                raise Exception(f"Statement Registration Failed")
-        
-            if not 'operationID' in operation:
-                raise Exception(f"No Operation ID for Statement")
-            
-            # Seems legit, send it back
-            return operation['operationID']
+        # Pull the registration ID out
+        operation = cbor2.loads(result)
 
-    """Wrapper for SCRAPI Check Registration call
+        # Check for common errors
+        if not "status" in operation or operation["status"] == "failed":
+            raise ScrapiException("Statement Registration Failed")
 
-    args:
-        registration_id (str): 
-    
-    returns:
-        application/json
-    """
-    def checkRegistration(self, registration_id):
-        self.checkEngine()
+        if not "operationID" in operation:
+            raise ScrapiException("No Operation ID for Statement")
 
-        err, result = self.engine.checkRegistration(registration_id)
+        # Seems legit, send it back
+        return operation["operationID"]
+
+    def check_registration(self, registration_id):
+        """Wrapper for SCRAPI Check Registration call
+
+        args:
+            registration_id (str):
+
+        returns:
+            application/json
+        """
+
+        self.check_engine()
+
+        err, result = self.engine.check_registration(registration_id)
         if err:
-            # Decode and log the RFC9290 Problem Details. 
-            problem_details = rfc9290.decode_problem_details(result)
+            # Decode and log the RFC9290 Problem Details.
+            problem_details = decode_problem_details(result)
             print(problem_details)
             return None
-        else:
-            # Pull the registration ID out
-            operation = cbor2.loads(result)
 
-            # Check for common errors
-            if not 'operationID' in operation:
-                raise Exception(f"Operation ID link lost")
+        # Pull the registration ID out
+        operation = cbor2.loads(result)
 
-            if not 'status' in operation:
-                raise Exception(f"No LRO status for Operation ID")
+        # Check for common errors
+        if not "operationID" in operation:
+            raise ScrapiException("Operation ID link lost")
 
-            # Seems legit, send it back
-            return cbor2.loads(result)
-                                                   
-    """Wrapper for SCRAPI Resolve Receipt call
+        if not "status" in operation:
+            raise ScrapiException("No LRO status for Operation ID")
 
-    args:
-        entry_id (str): 
-    
-    returns:
-        application/cose
-    """
-    def resolveReceipt(self, entry_id):
-        self.checkEngine()
+        # Seems legit, send it back
+        return cbor2.loads(result)
 
-        err, result = self.engine.resolveReceipt(entry_id)
+    def resolve_receipt(self, entry_id):
+        """Wrapper for SCRAPI Resolve Receipt call
+
+        args:
+            entry_id (str):
+
+        returns:
+            application/cose
+        """
+        self.check_engine()
+
+        err, result = self.engine.resolve_receipt(entry_id)
 
         if err:
-            # Decode and log the RFC9290 Problem Details. 
-            problem_details = rfc9290.decode_problem_details(result)
+            # Decode and log the RFC9290 Problem Details.
+            problem_details = decode_problem_details(result)
             print(problem_details)
             return None
-        else:
-            return result
 
-    """Utility function for synchronous receipt generation.
-    
-    CAUTION! On some Transparency Service implementations this call may block
-    for a *very* long time!
-    
-    args:
-        Content-Type: application/cose
+        return result
 
-        18([                            / COSE Sign1         /
-          h'a1013822',                  / Protected Header   /
-          {},                           / Unprotected Header /
-          null,                         / Detached Payload   /
-          h'269cd68f4211dffc...0dcb29c' / Signature          /
-        ])
-    
-    returns:
-        application/cose
-    """
-    def registerSignedStatementSync(self, statement):
-        res = self.registerSignedStatement(statement)
-        rid = res['registration_id']
+    def resolve_signed_statement(self, entry_id):
+        """Wrapper for SCRAPI Resolve Signed Statement call
+
+        args:
+            entry_id (str):
+
+        returns:
+            application/cose
+        """
+        self.check_engine()
+
+        err, result = self.engine.resolve_signed_statement(entry_id)
+
+        if err:
+            # Decode and log the RFC9290 Problem Details.
+            problem_details = decode_problem_details(result)
+            print(problem_details)
+            return None
+
+        return result
+
+    def issue_signed_statement(self, statement):
+        """Sign a statement using a key held on the remote server
+
+        args:
+            statement (bstr): the to-be-signed bytes of a COSE Sign1 input
+
+        returns:
+            application/cose
+        """
+
+        self.check_engine()
+
+        err, result = self.engine.issue_signed_statement(statement)
+
+        if err:
+            # Decode and log the RFC9290 Problem Details.
+            problem_details = decode_problem_details(result)
+            print(problem_details)
+            return None
+
+        return result
+
+    def register_signed_statement_sync(self, statement):
+        """Utility function for synchronous receipt generation.
+
+        CAUTION! On some Transparency Service implementations this call may block
+        for a *very* long time!
+
+        args:
+            Content-Type: application/cose
+
+            18([                            / COSE Sign1         /
+            h'a1013822',                  / Protected Header   /
+            {},                           / Unprotected Header /
+            null,                         / Detached Payload   /
+            h'269cd68f4211dffc...0dcb29c' / Signature          /
+            ])
+
+        returns:
+            application/cose
+        """
+
+        res = self.register_signed_statement(statement)
+        rid = res["registration_id"]
         while True:
-            res = self.checkRegistration(rid)
-            if res['status'] == 'running':
+            res = self.check_registration(rid)
+            if res["status"] == "running":
                 # Wait a moment then go back around
-                logging.info(f"Registration operation {rid} still running. Waiting...")
+                logging.info("Registration operation %s still running. Waiting...", rid)
                 time.sleep(2)
-            elif res['status'] == 'failed':
+            elif res["status"] == "failed":
                 # Fatal. Return
-                logging.info(f"Registration operation {rid} FAILED.")
+                logging.info("Registration operation %s FAILED.", rid)
                 return None
-            elif res['status'] == 'success':
-                # All done. Extract COSE and returtn the receipt
-                logging.info(f"Registration operation {rid} SUCCESS.")
+            elif res["status"] == "success":
+                # All done. Extract COSE and return the receipt
+                logging.info("Registration operation %s SUCCESS.", rid)
                 return "COSE goes here!"
             else:
-                logging.error(f"Malformed response from checkRegistration: {res}")
+                logging.error(
+                    "Malformed response from check_registration: %s", str(res)
+                )
                 return None
